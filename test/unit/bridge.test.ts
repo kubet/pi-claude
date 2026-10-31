@@ -135,7 +135,7 @@ async function collect(stream: AssistantMessageEventStream): Promise<unknown[]> 
 
 function startTurn(bridge: ReturnType<BridgeManager["acquire"]>["bridge"], messages: Message[], newUsers: readonly UserMessage[], signal?: AbortSignal): TurnHandle {
 	const stream = ai.createAssistantMessageEventStream();
-	const turn = bridge.turn({ ai, stream, model, messages, newUserMessages: newUsers, signal });
+	const turn = bridge.turn({ ai, stream, model, messages, newUserMessages: newUsers, toolNames: new Set(TOOLS.map((tool) => tool.name)), signal });
 	return { stream, events: collect(stream), turn };
 }
 

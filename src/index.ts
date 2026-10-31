@@ -17,7 +17,8 @@ import type {
 	TranscriptContext,
 	UserMessage,
 } from "@earendil-works/pi-ai";
-import { BASE_URL, effortFor, PROVIDER_ID, staticModels } from "./catalog";
+import { execFile } from "node:child_process";
+import { BASE_URL, effortFor, PROVIDER_ID, staticModels, versionProblem } from "./catalog";
 import { BridgeManager, bridgeKey, findClaude } from "./bridge";
 import { emptyAssistant } from "./convert";
 import { piAi, type PiAi } from "./host";
@@ -31,6 +32,8 @@ export default async function (pi: ExtensionAPI) {
 			.map(([key, value]) => `${key}=${(value ?? "").slice(0, 24)}`);
 		console.error(`[pi-claude] extension env: ${interesting.join(" ") || "(none)"}`);
 	}
+	const incompatible = await claudeVersionProblem(findClaude());
+	if (incompatible) console.error(`[pi-claude] ${incompatible}`);
 	const models = staticModels();
 	const manager = new BridgeManager(ai);
 	// Parked Claude Code processes keep the event loop alive; stop them on shutdown.
@@ -46,6 +49,13 @@ export default async function (pi: ExtensionAPI) {
 		const stream = ai.createAssistantMessageEventStream();
 		const output = emptyAssistant(model);
 		void (async () => {
+			if (incompatible) {
+				output.stopReason = "error";
+				output.errorMessage = incompatible;
+				stream.push({ type: "error", reason: "error", error: output });
+				stream.end();
+				return;
+			}
 			try {
 				const transcript = ai.collapseSystemMessages(context);
 				const systemPrompt = ai.getCurrentSystemPrompt(transcript.messages);
@@ -71,6 +81,7 @@ export default async function (pi: ExtensionAPI) {
 					model,
 					messages: transcript.messages,
 					newUserMessages: acquired.newUserMessages,
+					toolNames: new Set(tools.map((tool) => tool.name)),
 					signal: options?.signal,
 				});
 				// pi --print exits after the last prompt; live Claude Code
@@ -115,4 +126,18 @@ export default async function (pi: ExtensionAPI) {
 
 function printMode(): boolean {
 	return process.argv.some((arg) => arg === "--print" || arg === "-p" || arg.startsWith("--print="));
+}
+
+/** One-time CLI compatibility check; null when fine. */
+async function claudeVersionProblem(binary: string | undefined): Promise<string | null> {
+	if (binary === undefined) {
+		return "pi-claude found no claude CLI on PATH. Install Claude Code (https://code.claude.com) or set PI_CLAUDE_EXECUTABLE.";
+	}
+	const version = await new Promise<string | undefined>((resolve) => {
+		const child = execFile(binary, ["--version"], { timeout: 10_000 }, (error, stdout) => {
+			resolve(error ? undefined : stdout.trim());
+		});
+		child.on("error", () => resolve(undefined));
+	});
+	return versionProblem(version);
 }

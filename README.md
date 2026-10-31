@@ -63,4 +63,4 @@ PI_CLAUDE_E2E=1 bun test test/e2e   # real pi + real claude, scratch projects
 
 The unit suite drives the bridge through a scripted query factory. The e2e suite spawns the real pi CLI with the extension and asserts on observable outcomes: answers, files written through pi tools, multi-tool turns, memory across the parked-tool boundary, and recorded usage.
 
-Design credit: the parked-MCP bridge, isolation env, and hook pairing mirror the claude-agent provider in [opencode](https://github.com/anomalyco/opencode); bugs are mine.
+The bridge mechanics — parked MCP tool calls, PreToolUse pairing, the isolation environment — follow the claude-agent provider in [opencode](https://github.com/anomalyco/opencode). Everything pi-side is native to this repo: mapping the bridge onto pi's stateless `streamSimple()` contract, prefix-matched per-conversation processes, mid-turn parallel-call resolution, print-mode teardown, and the event conversion. Bugs are mine.

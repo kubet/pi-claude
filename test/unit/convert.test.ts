@@ -36,7 +36,7 @@ const emptyUsage = (): AssistantMessage["usage"] => ({
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 });
 
-function newAccumulator() {
+function newAccumulator(toolNames?: ReadonlySet<string>) {
 	const stream = ai.createAssistantMessageEventStream();
 	const output: AssistantMessage = {
 		role: "assistant",
@@ -48,7 +48,7 @@ function newAccumulator() {
 		stopReason: "pending",
 		timestamp: Date.now(),
 	};
-	return { stream, accumulator: new SdkToPiAccumulator(ai, stream, output, model), output };
+	return { stream, accumulator: new SdkToPiAccumulator(ai, stream, output, model, toolNames), output };
 }
 
 async function collect(stream: AssistantMessageEventStream): Promise<AssistantMessageEvent[]> {
@@ -238,15 +238,51 @@ describe("SdkToPiAccumulator", () => {
 		expect(end && end.type === "thinking_end" ? end.content : "").toBe("hmm");
 	});
 
-	test("usage accumulates across messages", () => {
+	test("usage reports last-call occupancy with summed output (opencode semantics)", () => {
 		const { accumulator, output } = newAccumulator();
+		// First API call: context occupancy 3/5/6, 4 output tokens.
 		accumulator.onStreamEvent({ type: "message_start", message: { usage: { input_tokens: 3, output_tokens: 4, cache_read_input_tokens: 5, cache_creation_input_tokens: 6 } } });
-		accumulator.onAssistant({ content: [], stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } });
+		// Second API call in the same turn: bigger context, 20 more output tokens.
+		accumulator.onStreamEvent({ type: "message_start", message: { usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 50, cache_creation_input_tokens: 0, output_tokens_details: { thinking_tokens: 7 } } } });
 		accumulator.finish({ subtype: "success", is_error: false });
-		expect(output.usage.input).toBe(3);
-		expect(output.usage.output).toBe(4);
-		expect(output.usage.cacheRead).toBe(5);
-		expect(output.usage.cacheWrite).toBe(6);
-		expect(output.usage.totalTokens).toBe(18);
+		expect(output.usage.input).toBe(100);
+		expect(output.usage.cacheRead).toBe(50);
+		expect(output.usage.cacheWrite).toBe(0);
+		expect(output.usage.output).toBe(24);
+		expect(output.usage.reasoning).toBe(7);
+		expect(output.usage.totalTokens).toBe(100 + 50 + 0 + 24);
+	});
+
+	test("calls to tools pi did not offer are not emitted as tool calls", async () => {
+		const { stream, accumulator } = newAccumulator(new Set(["read"]));
+		const events = collect(stream);
+		accumulator.onStreamEvent({ type: "message_start", message: { usage: { input_tokens: 1 } } });
+		accumulator.onStreamEvent({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "t1", name: "mcp__pi__WebSearch" } });
+		accumulator.onStreamEvent({ type: "content_block_stop", index: 0 });
+		accumulator.onStreamEvent({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "t2", name: "mcp__pi__read" } });
+		accumulator.onStreamEvent({ type: "content_block_stop", index: 1 });
+		accumulator.finish({ subtype: "success", is_error: false });
+		stream.end();
+		const collected = await events;
+		const toolEnds = collected.filter((e) => e.type === "toolcall_end");
+		expect(toolEnds.length).toBe(1);
+		const end = toolEnds[0];
+		expect(end && end.type === "toolcall_end" ? end.toolCall.name : "").toBe("read");
+	});
+
+	test("offered filter also applies to authoritative assistant-only delivery", async () => {
+		const { stream, accumulator } = newAccumulator(new Set(["read"]));
+		const events = collect(stream);
+		accumulator.onAssistant({
+			content: [
+				{ type: "tool_use", id: "t1", name: "mcp__pi__Write", input: {} },
+				{ type: "text", text: "kept" },
+			],
+			stop_reason: "tool_use",
+		});
+		stream.end();
+		const collected = await events;
+		expect(collected.filter((e) => e.type === "toolcall_end").length).toBe(0);
+		expect(collected.some((e) => e.type === "text_end")).toBe(true);
 	});
 });

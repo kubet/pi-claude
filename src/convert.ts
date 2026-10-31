@@ -59,6 +59,7 @@ class ToolArgumentsStream {
 interface AnthropicUsage {
 	input_tokens?: number | null;
 	output_tokens?: number | null;
+	output_tokens_details?: { thinking_tokens?: number | null } | null;
 	cache_creation_input_tokens?: number | null;
 	cache_read_input_tokens?: number | null;
 }
@@ -100,6 +101,13 @@ export interface ResultMessageLike {
 	result?: string;
 	usage?: AnthropicUsage | null;
 	total_cost_usd?: number | null;
+	api_error_status?: number | null;
+}
+
+export interface RateLimitInfo {
+	resetsAt?: number;
+	overageStatus?: string;
+	rateLimitType?: string;
 }
 
 /** Text and image blocks for an Anthropic user message. */
@@ -166,9 +174,24 @@ function mapStopReason(raw: string | null | undefined): "stop" | "toolUse" | "le
 }
 
 /** Turn a failed result message into an error; undefined when the result is fine. */
-export function resultError(result: ResultMessageLike): Error | undefined {
+export function resultError(result: ResultMessageLike, rateLimit?: RateLimitInfo): Error | undefined {
 	if (result.subtype === "success" && !result.is_error) return undefined;
 	const detail = typeof result.result === "string" ? result.result.slice(0, 2000) : "";
+	const resetSuffix = rateLimit?.resetsAt ? ` Window resets at ${new Date(rateLimit.resetsAt * 1000).toISOString()}.` : "";
+	if (/extra usage|billing|out of credits/i.test(detail)) {
+		return new Error(
+			`Claude Code usage limit hit: ${detail}${resetSuffix} Add usage at claude.ai/settings/usage or wait for the reset.`,
+		);
+	}
+	if (/\/login|not logged in/i.test(detail)) {
+		return new Error("Claude Code is not logged in: run `claude /login` and retry.");
+	}
+	if (/429|rate.?limit/i.test(detail) && !result.api_error_status) {
+		return new Error(`Claude Code hit a rate limit.${resetSuffix} ${detail}`);
+	}
+	if (result.api_error_status) {
+		return new Error(`Claude Code API error (HTTP ${result.api_error_status}) after internal retries: ${detail}`);
+	}
 	return new Error(`Claude Code turn failed (${result.subtype}): ${detail}`);
 }
 
@@ -257,7 +280,13 @@ export class SdkToPiAccumulator {
 		private readonly stream: AssistantMessageEventStream,
 		private readonly output: AssistantMessage,
 		private readonly model: Model<Api>,
+		/** Tool names pi offered this turn; calls to anything else stay between Claude Code and its own error. */
+		private readonly toolNames?: ReadonlySet<string>,
 	) {}
+
+	private offered(name: string): boolean {
+		return this.toolNames === undefined || this.toolNames.has(piToolName(name));
+	}
 
 	get hasToolCalls(): boolean {
 		return this.output.content.some((part) => part.type === "toolCall");
@@ -269,13 +298,23 @@ export class SdkToPiAccumulator {
 		this.stream.push({ type: "start", partial: this.output });
 	}
 
+	/**
+	 * One entry per API call. Each call re-reads the context, so input/cache
+	 * figures reflect occupancy — the LAST call's values stand — while output
+	 * accumulates across calls (opencode's usage semantics).
+	 */
+	private readonly calls: AnthropicUsage[] = [];
+
 	private addUsage(usage: AnthropicUsage | null | undefined): void {
 		if (!usage) return;
 		this.hadUsage = true;
-		this.output.usage.input += usage.input_tokens ?? 0;
-		this.output.usage.output += usage.output_tokens ?? 0;
-		this.output.usage.cacheRead += usage.cache_read_input_tokens ?? 0;
-		this.output.usage.cacheWrite += usage.cache_creation_input_tokens ?? 0;
+		this.calls.push(usage);
+		this.output.usage.input = usage.input_tokens ?? 0;
+		this.output.usage.cacheRead = usage.cache_read_input_tokens ?? 0;
+		this.output.usage.cacheWrite = usage.cache_creation_input_tokens ?? 0;
+		this.output.usage.output = this.calls.reduce((sum, call) => sum + (call.output_tokens ?? 0), 0);
+		const reasoning = this.calls.reduce((sum, call) => sum + (call.output_tokens_details?.thinking_tokens ?? 0), 0);
+		if (reasoning > 0) this.output.usage.reasoning = reasoning;
 		this.output.usage.totalTokens =
 			this.output.usage.input + this.output.usage.output + this.output.usage.cacheRead + this.output.usage.cacheWrite;
 	}
@@ -302,7 +341,7 @@ export class SdkToPiAccumulator {
 					const at = this.output.content.length - 1;
 					this.openBlocks.set(index, { contentIndex: at, kind: "thinking" });
 					this.stream.push({ type: "thinking_start", contentIndex: at, partial: this.output });
-				} else if (block?.type === "tool_use") {
+				} else if (block?.type === "tool_use" && this.offered(block.name ?? "")) {
 					const pushed: AssistantMessage["content"][number] = {
 						type: "toolCall",
 						id: block.id ?? `toolu_${index}`,
@@ -409,7 +448,7 @@ export class SdkToPiAccumulator {
 				const at = this.output.content.length - 1;
 				this.stream.push({ type: "thinking_start", contentIndex: at, partial: this.output });
 				this.stream.push({ type: "thinking_end", contentIndex: at, content: block.thinking ?? "", partial: this.output });
-			} else if (block.type === "tool_use") {
+			} else if (block.type === "tool_use" && this.offered(block.name ?? "")) {
 				const input =
 					block.input && typeof block.input === "object" && !Array.isArray(block.input)
 						? (block.input as ToolCall["arguments"])

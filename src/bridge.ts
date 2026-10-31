@@ -31,7 +31,7 @@ import type {
 	TranscriptContext,
 	UserMessage,
 } from "@earendil-works/pi-ai";
-import type { UserContentBlock } from "./convert";
+import type { RateLimitInfo, UserContentBlock } from "./convert";
 import type { PiAi } from "./host";
 import { makeToolServer, MCP_SERVER_NAME, piToolName } from "./mcp";
 import { PendingTools } from "./pending";
@@ -190,6 +190,7 @@ export interface TurnInput {
 	model: Model<Api>;
 	messages: readonly Message[];
 	newUserMessages: readonly UserMessage[];
+	toolNames: ReadonlySet<string>;
 	signal?: AbortSignal;
 }
 
@@ -206,11 +207,13 @@ export class Bridge {
 	private fatal: unknown;
 	private queryDone = false;
 	private skipNextResult = false;
+	private idleTimer: ReturnType<typeof setTimeout> | undefined;
 
 	constructor(
 		private readonly spawn: SpawnQuery,
 		readonly key: BridgeKey,
 		readonly pending: PendingTools,
+		private readonly offeredTools: ReadonlySet<string>,
 		options: Options,
 		initial: readonly SDKUserMessage[],
 	) {
@@ -220,6 +223,15 @@ export class Bridge {
 	}
 
 	private readonly query: QueryLike;
+
+	/** Idle bridges hold a claude process for no reason; retire after 5 minutes (opencode parity). */
+	private armIdleShutdown(): void {
+		clearTimeout(this.idleTimer);
+		this.idleTimer = setTimeout(() => {
+			if (!this.busy && !this.dead) this.kill();
+		}, IDLE_MS);
+		this.idleTimer.unref?.();
+	}
 
 	private async *prompt(): AsyncGenerator<SDKUserMessage> {
 		while (!this.dead) {
@@ -291,6 +303,7 @@ export class Bridge {
 
 	kill(): void {
 		this.dead = true;
+		clearTimeout(this.idleTimer);
 		try {
 			this.query.interrupt();
 		} catch {
@@ -307,10 +320,14 @@ export class Bridge {
 	 */
 	async turn(input: TurnInput): Promise<AssistantMessage> {
 		const { ai, stream, model, messages, newUserMessages, signal } = input;
+		if (this.busy) {
+			throw new Error("pi-claude: previous turn on this conversation is still active");
+		}
 		this.busy = true;
 		this.lastActivity = Date.now();
+		this.armIdleShutdown();
 		const output = emptyAssistant(model);
-		const accumulator = new SdkToPiAccumulator(ai, stream, output, model);
+		const accumulator = new SdkToPiAccumulator(ai, stream, output, model, input.toolNames);
 		// Claude Code runs parallel tool calls from one assistant message
 		// sequentially: resolving the first parked call makes it fire the next
 		// mid-turn, with no new SDK message in between. Satisfy any parked call
@@ -326,35 +343,38 @@ export class Bridge {
 			return toolResultToMcp(result);
 		};
 		try {
-		for (const message of messages) {
-			if (message.role !== "toolResult") continue;
-			const toolResult = message as ToolResultMessage;
-			if (this.consumedResults.has(toolResult.toolCallId)) continue;
-			if (this.pending.resolveIfWaiting(toolResult.toolCallId, toolResultToMcp(toolResult))) {
-				this.consumedResults.add(toolResult.toolCallId);
+			for (const message of messages) {
+				if (message.role !== "toolResult") continue;
+				const toolResult = message as ToolResultMessage;
+				if (this.consumedResults.has(toolResult.toolCallId)) continue;
+				if (this.pending.resolveIfWaiting(toolResult.toolCallId, toolResultToMcp(toolResult))) {
+					this.consumedResults.add(toolResult.toolCallId);
+				}
 			}
+			for (const user of newUserMessages) {
+				this.pushUser({
+					type: "user",
+					message: { role: "user", content: sdkUserContent(user.content) },
+					parent_tool_use_id: null,
+				});
+			}
+			await this.readUntilBoundary(accumulator, stream, output, signal);
+		} finally {
+			this.busy = false;
+			this.lastActivity = Date.now();
+			this.armIdleShutdown();
 		}
-		for (const user of newUserMessages) {
-			this.pushUser({
-				type: "user",
-				message: { role: "user", content: sdkUserContent(user.content) },
-				parent_tool_use_id: null,
-			});
-		}
-		await this.readUntilBoundary(accumulator, stream, output, signal);
-	} finally {
-		this.busy = false;
-		this.lastActivity = Date.now();
-	}
 		return output;
 	}
 
+	/** Reads SDK messages until the turn ends at a tool boundary or a result. */
 	private async readUntilBoundary(
 		accumulator: SdkToPiAccumulator,
 		stream: AssistantMessageEventStream,
 		output: AssistantMessage,
 		signal: AbortSignal | undefined,
 	): Promise<void> {
+		let rateLimit: RateLimitInfo | undefined;
 		for (;;) {
 			const aborted = signal
 				? (() => {
@@ -379,6 +399,7 @@ export class Bridge {
 				return;
 			}
 			if (message === "closed") {
+				this.dead = true;
 				throw new Error(this.fatal instanceof Error ? this.fatal.message : "Claude Code process exited mid-turn");
 			}
 			switch (message.type) {
@@ -388,11 +409,22 @@ export class Bridge {
 				case "assistant": {
 					const inner = message.message;
 					accumulator.onAssistant(inner);
-					if (inner.content.some((block) => block.type === "tool_use")) {
+					// Only calls to tools pi offered end the turn; anything else
+					// is left to Claude Code, which gets its own error from the
+					// MCP layer and self-corrects (opencode parity).
+					const offeredCall = (inner.content ?? []).some(
+						(block) => block.type === "tool_use" && this.offeredTools.has(piToolName(block.name ?? "")),
+					);
+					if (offeredCall) {
 						stream.push({ type: "done", reason: "toolUse", message: output });
 						stream.end();
 						return;
 					}
+					break;
+				}
+				case "rate_limit_event": {
+					const info = (message as unknown as { rate_limit_info?: RateLimitInfo }).rate_limit_info;
+					if (info) rateLimit = info;
 					break;
 				}
 				case "result": {
@@ -400,8 +432,15 @@ export class Bridge {
 						this.skipNextResult = false;
 						break;
 					}
-					const error = resultError(message);
-					if (error) throw error;
+					const error = resultError(message, rateLimit);
+					if (error) {
+						// A terminal claude-side failure leaves nothing to read;
+						// retire the process so pi's retry respawns cleanly with
+						// a transcript replay instead of hanging on a dead turn.
+						this.dead = true;
+						this.pending.clear();
+						throw error;
+					}
 					const reason = accumulator.finish(message);
 					output.stopReason = reason;
 					stream.push({ type: "done", reason, message: output });
@@ -434,6 +473,7 @@ export interface AcquiredBridge {
 	newUserMessages: readonly UserMessage[];
 }
 
+const IDLE_MS = 5 * 60_000;
 const MAX_BRIDGES = 6;
 
 function toSdkUserMessage(content: UserContentBlock[]): SDKUserMessage {
@@ -502,7 +542,14 @@ export class BridgeManager {
 			initial.unshift(toSdkUserMessage([{ type: "text", text: restoreMessage(input.transcript.messages) }]));
 		}
 		const pending = new PendingTools();
-		const bridge = new Bridge(this.spawn, input.key, pending, this.buildOptions(input, pending), initial);
+		const bridge = new Bridge(
+			this.spawn,
+			input.key,
+			pending,
+			new Set(input.tools.map((tool) => tool.name)),
+			this.buildOptions(input, pending),
+			initial,
+		);
 		bridge.sentHashes = incoming;
 		this.bridges.push(bridge);
 		this.evict(bridge);

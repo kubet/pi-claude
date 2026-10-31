@@ -66,3 +66,27 @@ export function staticModels(): Model<Api>[] {
 		thinkingLevelMap: THINKING_LEVEL_MAP as Model<Api>["thinkingLevelMap"],
 	}));
 }
+
+/** Minimum Claude Code CLI this bridge supports (opencode parity: 2.1.248). */
+export const MIN_CLAUDE_VERSION = [2, 1, 248] as const;
+
+/** null when compatible; an actionable message when the CLI is too old or unknown. */
+export function versionProblem(version: string | undefined): string | null {
+	if (version === undefined) {
+		return "pi-claude could not read the claude CLI version. Run `claude --version` to check the installation.";
+	}
+	const match = /(\d+)\.(\d+)\.(\d+)/.exec(version);
+	if (!match) {
+		return `pi-claude could not parse the claude CLI version "${version}". Run \`claude update\`.`;
+	}
+	const [major, minor, patch] = [Number(match[1]), Number(match[2]), Number(match[3])];
+	for (let i = 0; i < MIN_CLAUDE_VERSION.length; i++) {
+		const have = [major, minor, patch][i] as number;
+		const want = MIN_CLAUDE_VERSION[i];
+		if (have > (want as number)) return null;
+		if (have < (want as number)) {
+			return `pi-claude needs Claude Code ${MIN_CLAUDE_VERSION.join(".")} or newer (found ${version}). Run \`claude update\`.`;
+		}
+	}
+	return null;
+}
