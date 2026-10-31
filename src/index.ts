@@ -25,8 +25,18 @@ import { piAi, type PiAi } from "./host";
 export default async function (pi: ExtensionAPI) {
 	// Fail fast on a host that provides no pi-ai module.
 	const ai: PiAi = await piAi();
+	if (process.env.PI_CLAUDE_DEBUG) {
+		const interesting = Object.entries(process.env)
+			.filter(([key]) => /CLAUDE|ANTHROPIC|API_KEY/i.test(key))
+			.map(([key, value]) => `${key}=${(value ?? "").slice(0, 24)}`);
+		console.error(`[pi-claude] extension env: ${interesting.join(" ") || "(none)"}`);
+	}
 	const models = staticModels();
 	const manager = new BridgeManager(ai);
+	// Parked Claude Code processes keep the event loop alive; stop them on shutdown.
+	pi.events.on("session_shutdown", () => {
+		manager.shutdown();
+	});
 
 	const streamSimple = (
 		model: Model<Api>,
@@ -55,7 +65,7 @@ export default async function (pi: ExtensionAPI) {
 					cwd: process.cwd(),
 					maxTokens: options?.maxTokens,
 				});
-				await acquired.bridge.turn({
+				const final = await acquired.bridge.turn({
 					ai,
 					stream,
 					model,
@@ -63,6 +73,13 @@ export default async function (pi: ExtensionAPI) {
 					newUserMessages: acquired.newUserMessages,
 					signal: options?.signal,
 				});
+				// pi --print exits after the last prompt; live Claude Code
+				// processes would keep it hanging. Multi-prompt print runs
+				// continue via the bridge's respawn-and-restore path.
+				if (printMode() && final.stopReason !== "toolUse" && final.stopReason !== "pending") {
+					manager.shutdown();
+				}
+
 			} catch (error) {
 				output.stopReason = output.stopReason === "pending" ? "error" : output.stopReason;
 				output.errorMessage = error instanceof Error ? error.message : String(error);
@@ -94,4 +111,8 @@ export default async function (pi: ExtensionAPI) {
 
 	pi.registerProvider(provider);
 
+}
+
+function printMode(): boolean {
+	return process.argv.some((arg) => arg === "--print" || arg === "-p" || arg.startsWith("--print="));
 }

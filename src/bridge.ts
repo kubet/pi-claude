@@ -52,7 +52,26 @@ export interface QueryLike extends AsyncIterable<SDKMessage> {
 /** Injectable query factory so tests can drive the bridge without claude. */
 export type SpawnQuery = (options: Options, prompt: AsyncGenerator<SDKUserMessage>) => QueryLike;
 
-export const sdkSpawn: SpawnQuery = (options, prompt) => query({ prompt, options });
+export const sdkSpawn: SpawnQuery = (options, prompt) => {
+	const q = query({ prompt, options });
+	if (!process.env.PI_CLAUDE_DEBUG) return q;
+	// Debug tee. Never stringify `options`: tool schemas are circular, and one
+	// JSON.stringify crash here would take the whole turn down with it.
+	const systemPrompt = options.systemPrompt;
+	console.error(
+		`[pi-claude] spawn: model=${options.model ?? "(default)"} effort=${options.effort ?? "(default)"} systemPrompt=${typeof systemPrompt === "string" ? systemPrompt.length : "(structured)"} mcp=${Object.keys(options.mcpServers ?? {}).join(",")}`,
+	);
+	const tee: QueryLike = {
+		interrupt: () => q.interrupt(),
+		async *[Symbol.asyncIterator]() {
+			for await (const message of q) {
+				console.error(`[pi-claude] msg: ${JSON.stringify(message).slice(0, 800)}`);
+				yield message;
+			}
+		},
+	};
+	return tee;
+};
 
 /** Claude Code features that duplicate pi's; pi's version wins (opencode parity). */
 const ISOLATION_ENV: Record<string, string | undefined> = {
@@ -286,7 +305,7 @@ export class Bridge {
 	 * feed new user messages, read until the assistant produced tool calls
 	 * (pi executes them; the next call continues) or the turn ended.
 	 */
-	async turn(input: TurnInput): Promise<void> {
+	async turn(input: TurnInput): Promise<AssistantMessage> {
 		const { ai, stream, model, messages, newUserMessages, signal } = input;
 		this.busy = true;
 		this.lastActivity = Date.now();
@@ -313,6 +332,7 @@ export class Bridge {
 			this.busy = false;
 			this.lastActivity = Date.now();
 		}
+		return output;
 	}
 
 	private async readUntilBoundary(
@@ -415,8 +435,7 @@ export class BridgeManager {
 	) {}
 
 	private buildOptions(input: AcquireInput, pending: PendingTools): Options {
-		const systemPrompt =
-			input.tools.length > 0 ? `${input.systemPrompt ?? ""}${ADAPTER_NOTE}` : input.systemPrompt;
+		const systemPrompt = claudeSystemPrompt(input.systemPrompt, input.tools.length > 0);
 		const options: Options = {
 			cwd: input.cwd,
 			effort: input.key.effort as Options["effort"],
@@ -485,4 +504,32 @@ export class BridgeManager {
 
 		this.bridges = this.bridges.filter((bridge) => !sorted.includes(bridge));
 	}
+	/** Kill every live Claude Code process (pi session shutdown). */
+	shutdown(): void {
+		for (const bridge of this.bridges) bridge.kill();
+		this.bridges = [];
+	}
+}
+
+/**
+ * Compose the Claude Code-facing system prompt from pi's.
+ *
+ * pi's prompt sections are harness chrome Claude Code cannot use: <tools>
+ * duplicates the real MCP schemas, <docs> and <skills> point at pi-side files
+ * Claude Code reaches through pi's tools when needed. Worse, forwarding them
+ * verbatim bloats the request enough to tip SDK turns into Claude Code's
+ * overage path on a subscription with thin rolling headroom ("out of extra
+ * usage"), so the bridge keeps the behavioral core — preamble, <rules>, and
+ * the MCP adapter note — under PI_CLAUDE_SYSTEM_BUDGET (default 1600 chars).
+ */
+export function claudeSystemPrompt(piPrompt: string | undefined, withTools: boolean): string {
+	const budget = Number(process.env.PI_CLAUDE_SYSTEM_BUDGET ?? 1600);
+	const keep = (piPrompt ?? "")
+		.replace(/<tools>[\s\S]*?<\/tools>/g, "")
+		.replace(/<docs>[\s\S]*?<\/docs>/g, "")
+		.replace(/<skills>[\s\S]*?<\/skills>/g, "")
+		.replace(/\n{3,}/g, "\n\n")
+		.trim();
+	const prompt = `${keep}${withTools ? ADAPTER_NOTE : ""}`;
+	return prompt.length <= budget ? prompt : prompt.slice(0, budget);
 }

@@ -5,6 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type {
+	AssistantMessage,
 	AssistantMessageEventStream,
 	Message,
 	ToolResultMessage,
@@ -122,8 +123,8 @@ const TOOLS = [
 
 interface TurnHandle {
 	stream: AssistantMessageEventStream;
-	events: Promise<AssistantMessageEventStream extends never ? never : unknown[]>;
-	turn: Promise<void>;
+	events: Promise<unknown[]>;
+	turn: Promise<AssistantMessage>;
 }
 
 async function collect(stream: AssistantMessageEventStream): Promise<unknown[]> {
