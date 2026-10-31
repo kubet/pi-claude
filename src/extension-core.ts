@@ -56,9 +56,15 @@ export async function registerClaudeCodeProvider(pi: ExtensionAPI, ai: PiAi): Pr
 				return;
 			}
 			try {
-				const transcript = ai.collapseSystemMessages(context);
-				const systemPrompt = ai.getCurrentSystemPrompt(transcript.messages);
-				const tools = ai.getCurrentTools(transcript.messages);
+			const transcript = ai.collapseSystemMessages(context);
+			const systemPrompt = ai.getCurrentSystemPrompt(transcript.messages);
+			const tools = ai.getCurrentTools(transcript.messages);
+			if (process.env.PI_CLAUDE_DEBUG) {
+				const raw = context as unknown as { systemPrompt?: unknown; tools?: unknown };
+				console.error(
+					`[pi-claude] context: msgs=${transcript.messages.length} prompt=${systemPrompt?.length ?? 0} tools=${tools.length} rawPrompt=${typeof raw.systemPrompt === "string" ? raw.systemPrompt.length : "?"} rawTools=${Array.isArray(raw.tools) ? raw.tools.length : "?"}`,
+				);
+			}
 				const users = transcript.messages.filter(
 					(message: Message): message is UserMessage => message.role === "user",
 				);
