@@ -3,19 +3,34 @@
 	"version": "0.1.0",
 	"description": "Run Claude Code as a model provider inside pi: pi keeps its tools, permissions and session log; Claude Code is the engine. The same bridge opencode ships, mapped onto pi's provider contract.",
 	"type": "module",
-	"keywords": ["pi-package", "omp", "pi", "extension", "provider", "claude", "claude-code"],
-	"files": ["src", "README.md"],
+	"keywords": [
+		"pi-package",
+		"omp",
+		"pi",
+		"extension",
+		"provider",
+		"claude",
+		"claude-code"
+	],
+	"files": [
+		"src",
+		"README.md"
+	],
 	"omp": {
-		"extensions": ["./src/index.ts"]
+		"extensions": [
+			"./src/index.ts"
+		]
 	},
 	"pi": {
-		"extensions": ["./src/index.ts"]
+		"extensions": [
+			"./src/index.ts"
+		]
 	},
 	"scripts": {
 		"test": "bun test",
 		"test:unit": "bun test test/unit",
 		"test:e2e": "bun test test/e2e",
-		"check": "tsc --noEmit"
+		"check": "bunx tsc --noEmit"
 	},
 	"dependencies": {
 		"@anthropic-ai/claude-agent-sdk": "^0.3.316",
@@ -24,6 +39,7 @@
 	"devDependencies": {
 		"@earendil-works/pi-ai": "^1.4.0",
 		"@earendil-works/pi-coding-agent": "^1.4.0",
-		"@types/bun": "^1.3.3"
+		"@types/bun": "^1.3.3",
+		"typescript": "^7.0.2"
 	}
 }
