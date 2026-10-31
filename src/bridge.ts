@@ -416,6 +416,8 @@ export class Bridge {
 						(block) => block.type === "tool_use" && this.offeredTools.has(piToolName(block.name ?? "")),
 					);
 					if (offeredCall) {
+						// omp's loop reads message.stopReason (pi reads the event's reason).
+						output.stopReason = "toolUse";
 						stream.push({ type: "done", reason: "toolUse", message: output });
 						stream.end();
 						return;
