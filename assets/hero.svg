@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="230" viewBox="0 0 860 230">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8b949e"/>
+    </marker>
+  </defs>
+  <rect x="30" y="55" width="190" height="110" rx="14" fill="#1f6feb" opacity="0.16"/>
+  <text x="125" y="100" text-anchor="middle" font-family="-apple-system,Segoe UI,Helvetica,Arial" font-size="30" font-weight="700" fill="#1f6feb">pi</text>
+  <text x="125" y="128" text-anchor="middle" font-family="-apple-system,Segoe UI,Helvetica,Arial" font-size="14" fill="#7d8590">agent loop · tools</text>
+  <text x="125" y="148" text-anchor="middle" font-family="-apple-system,Segoe UI,Helvetica,Arial" font-size="14" fill="#7d8590">permissions · session</text>
+
+  <line x1="228" y1="110" x2="322" y2="110" stroke="#8b949e" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="275" y="96" text-anchor="middle" font-family="-apple-system,Segoe UI,Helvetica,Arial" font-size="12" fill="#7d8590">streamSimple</text>
+
+  <rect x="330" y="55" width="200" height="110" rx="14" fill="#8957e5" opacity="0.16"/>
+  <text x="430" y="92" text-anchor="middle" font-family="-apple-system,Segoe UI,Helvetica,Arial" font-size="19" font-weight="700" fill="#8957e5">pi-claude</text>
+  <text x="430" y="118" text-anchor="middle" font-family="-apple-system,Segoe UI,Helvetica,Arial" font-size="14" fill="#7d8590">one claude process</text>
+  <text x="430" y="138" text-anchor="middle" font-family="-apple-system,Segoe UI,Helvetica,Arial" font-size="14" fill="#7d8590">per conversation</text>
+
+  <line x1="538" y1="110" x2="632" y2="110" stroke="#8b949e" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="585" y="96" text-anchor="middle" font-family="-apple-system,Segoe UI,Helvetica,Arial" font-size="12" fill="#7d8590">claude-agent-sdk</text>
+
+  <rect x="640" y="55" width="190" height="110" rx="14" fill="#da3633" opacity="0.14"/>
+  <text x="735" y="92" text-anchor="middle" font-family="-apple-system,Segoe UI,Helvetica,Arial" font-size="19" font-weight="700" fill="#da3633">Claude Code</text>
+  <text x="735" y="118" text-anchor="middle" font-family="-apple-system,Segoe UI,Helvetica,Arial" font-size="14" fill="#7d8590">model + agent loop</text>
+  <text x="735" y="138" text-anchor="middle" font-family="-apple-system,Segoe UI,Helvetica,Arial" font-size="14" fill="#7d8590">own tools off</text>
+
+  <path d="M735 172 L735 200 L125 200 L125 172" fill="none" stroke="#8b949e" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  <text x="430" y="192" text-anchor="middle" font-family="-apple-system,Segoe UI,Helvetica,Arial" font-size="13" fill="#7d8590">tool calls park over MCP until pi executes them and hands back the result</text>
+</svg>
