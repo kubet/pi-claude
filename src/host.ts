@@ -12,8 +12,7 @@
 
 import type * as PiAiModule from "@earendil-works/pi-ai";
 
-export type PiAi = PiAiModule;
-
+export type PiAi = typeof PiAiModule;
 const SPECIFIERS = ["@earendil-works/pi-ai", "@mariozechner/pi-ai", "@oh-my-pi/pi-ai"] as const;
 let cached: PiAi | undefined;
 
