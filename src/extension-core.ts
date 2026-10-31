@@ -20,11 +20,9 @@ import type {
 
 export type PiAi = typeof PiAiModule;
 import { execFile } from "node:child_process";
-import { BASE_URL, effortFor, PROVIDER_ID, staticModels, versionProblem } from "./catalog";
+import { API_ID, BASE_URL, effortFor, PROVIDER_ID, staticModels, versionProblem } from "./catalog";
 import { BridgeManager, bridgeKey, findClaude } from "./bridge";
 import { emptyAssistant } from "./convert";
-
-
 
 export async function registerClaudeCodeProvider(pi: ExtensionAPI, ai: PiAi): Promise<void> {
 	if (process.env.PI_CLAUDE_DEBUG) {
@@ -100,26 +98,17 @@ export async function registerClaudeCodeProvider(pi: ExtensionAPI, ai: PiAi): Pr
 		return stream;
 	};
 
-	const provider: Provider = {
-		id: PROVIDER_ID,
+	// Legacy registration form: omp's fork only accepts (name, config), and
+	// pi supports both. The marker apiKey satisfies the config gate; the real
+	// credentials live in the claude CLI itself, checked per turn.
+	pi.registerProvider(PROVIDER_ID, {
 		name: "Claude Code",
 		baseUrl: BASE_URL,
-		auth: {
-			apiKey: {
-				name: "Claude Code CLI (subscription or ambient ANTHROPIC_* credentials)",
-				resolve: async () =>
-					findClaude()
-						? { auth: { apiKey: "claude-code" }, source: "local Claude Code CLI" }
-						: undefined,
-			},
-		},
-		getModels: () => models,
-		stream: (model: Model<Api>, context: TranscriptContext, options?: ApiStreamOptions<Api>) =>
-			streamSimple(model, context, options as SimpleStreamOptions | undefined),
+		apiKey: "claude-code",
+		api: API_ID,
+		models,
 		streamSimple,
-	};
-
-	pi.registerProvider(provider);
+	});
 }
 
 function printMode(): boolean {
