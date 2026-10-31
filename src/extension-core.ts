@@ -57,12 +57,15 @@ export async function registerClaudeCodeProvider(pi: ExtensionAPI, ai: PiAi): Pr
 			}
 			try {
 			const transcript = ai.collapseSystemMessages(context);
-			const systemPrompt = ai.getCurrentSystemPrompt(transcript.messages);
-			const tools = ai.getCurrentTools(transcript.messages);
+			// omp's fork predates pi's normalized TranscriptContext: tools and
+			// the system prompt ride on the context object instead of a leading
+			// system message. Read both shapes.
+			const raw = context as unknown as { systemPrompt?: unknown; tools?: unknown };
+			const systemPrompt = systemPromptCompat(ai, transcript.messages, raw.systemPrompt);
+			const tools = toolsCompat(ai, transcript.messages, raw.tools);
 			if (process.env.PI_CLAUDE_DEBUG) {
-				const raw = context as unknown as { systemPrompt?: unknown; tools?: unknown };
 				console.error(
-					`[pi-claude] context: msgs=${transcript.messages.length} prompt=${systemPrompt?.length ?? 0} tools=${tools.length} rawPrompt=${typeof raw.systemPrompt === "string" ? raw.systemPrompt.length : "?"} rawTools=${Array.isArray(raw.tools) ? raw.tools.length : "?"}`,
+					`[pi-claude] context: msgs=${transcript.messages.length} prompt=${systemPrompt.length} tools=${tools.length}`,
 				);
 			}
 				const users = transcript.messages.filter(
@@ -133,4 +136,33 @@ async function claudeVersionProblem(binary: string | undefined): Promise<string 
 		child.on("error", () => resolve(undefined));
 	});
 	return versionProblem(version);
+}
+
+/** pi keeps the prompt in the transcript; omp's fork may pass it on the context. */
+function systemPromptCompat(ai: PiAi, messages: readonly Message[], raw: unknown): string {
+	const fromMessages = ai.getCurrentSystemPrompt(messages) ?? "";
+	if (fromMessages.length > 0) return fromMessages;
+	if (typeof raw === "string") return raw;
+	if (Array.isArray(raw)) {
+		return raw
+			.map((part) => (part && typeof part === "object" && "text" in part ? String((part as { text: unknown }).text) : ""))
+			.filter(Boolean)
+			.join("\n\n");
+	}
+	if (raw && typeof raw === "object" && "content" in raw) {
+		return systemPromptCompat(ai, messages, (raw as { content: unknown }).content);
+	}
+	return "";
+}
+
+/** Same dual-shape read for tool declarations. */
+function toolsCompat(ai: PiAi, messages: readonly Message[], raw: unknown): Tool[] {
+	const fromMessages = ai.getCurrentTools(messages);
+	if (fromMessages.length > 0) return [...fromMessages];
+	if (!Array.isArray(raw)) return [];
+	return raw.filter((tool): tool is Tool => {
+		if (!tool || typeof tool !== "object") return false;
+		const candidate = tool as Record<string, unknown>;
+		return typeof candidate.name === "string" && typeof candidate.description === "string";
+	});
 }
