@@ -14,9 +14,10 @@ import type {
 } from "@earendil-works/pi-ai";
 import { BridgeManager, bridgeKey, type QueryLike, type SpawnQuery } from "../../src/bridge";
 import { PROVIDER_ID, staticModels } from "../../src/catalog";
-import { piAi, type PiAi } from "../../src/host";
+import * as piAiModule from "@earendil-works/pi-ai";
+import type { PiAi } from "../../src/extension-core";
 
-const ai: PiAi = await piAi();
+const ai: PiAi = piAiModule;
 const model = staticModels()[0] as ReturnType<typeof staticModels>[0];
 
 /** Scripted SDK query: the test emits messages; the bridge reads them. */

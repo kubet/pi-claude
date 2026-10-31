@@ -32,7 +32,7 @@ import type {
 	UserMessage,
 } from "@earendil-works/pi-ai";
 import type { RateLimitInfo, UserContentBlock } from "./convert";
-import type { PiAi } from "./host";
+import type { PiAi } from "./extension-core";
 import { makeToolServer, MCP_SERVER_NAME, piToolName } from "./mcp";
 import { PendingTools } from "./pending";
 import {

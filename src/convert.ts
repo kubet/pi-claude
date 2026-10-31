@@ -23,7 +23,7 @@ import type {
 	UserMessage,
 	JsonObject,
 } from "@earendil-works/pi-ai";
-import type { PiAi } from "./host";
+import type { PiAi } from "./extension-core";
 import { piToolName } from "./mcp";
 
 /** pi tool-call arguments, assembled from JSON deltas. */

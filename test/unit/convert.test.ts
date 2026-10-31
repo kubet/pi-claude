@@ -11,9 +11,10 @@ import {
 	resultError,
 	restoreMessage,
 } from "../../src/convert";
-import { piAi, type PiAi } from "../../src/host";
+import * as piAiModule from "@earendil-works/pi-ai";
+import type { PiAi } from "../../src/extension-core";
 
-const ai: PiAi = await piAi();
+const ai: PiAi = piAiModule;
 const model: Model<"claude-code"> = {
 	id: "default",
 	name: "test",
