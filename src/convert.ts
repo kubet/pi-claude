@@ -8,6 +8,7 @@
 // anything the partials missed. Shapes are deliberately structural: the SDK
 // ships Beta variants with nullable fields that keep drifting.
 
+import { createHash } from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type {
 	Api,
@@ -108,7 +109,8 @@ export type UserContentBlock =
 	| { type: "image"; source: { type: "base64"; media_type: ImageMediaType; data: string } };
 
 export function stableHash(value: unknown): string {
-	return Bun.hash(JSON.stringify(value)).toString(36);
+	// node:crypto works under both node (pi) and bun (tests); Bun.hash is bun-only.
+	return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 32);
 }
 
 export function emptyAssistant(model: Model<Api>): AssistantMessage {

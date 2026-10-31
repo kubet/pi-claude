@@ -75,7 +75,9 @@ const ISOLATION_ENV: Record<string, string | undefined> = {
 const PASSTHROUGH_ENV = ["ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS"];
 
 function sdkEnv(): Record<string, string | undefined> {
-	const env: Record<string, string | undefined> = { ...ISOLATION_ENV };
+	// Options.env is the child's COMPLETE environment, not a delta: start from
+	// pi's own env (HOME, PATH, credentials helpers) or claude looks logged out.
+	const env: Record<string, string | undefined> = { ...process.env, ...ISOLATION_ENV };
 	for (const name of PASSTHROUGH_ENV) {
 		if (process.env[name]) env[name] = process.env[name];
 	}
