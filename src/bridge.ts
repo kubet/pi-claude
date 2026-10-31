@@ -189,7 +189,7 @@ export class Bridge {
 	constructor(
 		private readonly spawn: SpawnQuery,
 		readonly key: BridgeKey,
-		private readonly pending: PendingTools,
+		readonly pending: PendingTools,
 		options: Options,
 		initial: readonly SDKUserMessage[],
 	) {
@@ -204,9 +204,9 @@ export class Bridge {
 		while (!this.dead) {
 			while (this.outgoing.length > 0) yield this.outgoing.shift() as SDKUserMessage;
 			if (this.dead) return;
-			await new Promise<void>((resolve) => {
-				this.wake = resolve;
-			});
+			const gate = Promise.withResolvers<void>();
+			this.wake = gate.resolve;
+			await gate.promise;
 			this.wake = undefined;
 		}
 	}
@@ -321,10 +321,12 @@ export class Bridge {
 	): Promise<void> {
 		for (;;) {
 			const aborted = signal
-				? new Promise<true>((resolve) => {
-						if (signal.aborted) resolve(true);
-						else signal.addEventListener("abort", () => resolve(true), { once: true });
-					})
+				? (() => {
+						const gate = Promise.withResolvers<true>();
+						if (signal.aborted) gate.resolve(true);
+						else signal.addEventListener("abort", () => gate.resolve(true), { once: true });
+						return gate.promise;
+					})()
 				: null;
 			const message: SDKMessage | "closed" = aborted
 				? await Promise.race([this.nextMessage(), aborted.then(() => "closed" as const)])

@@ -432,11 +432,11 @@ export class SdkToPiAccumulator {
 	/** Turn finished: settle usage/cost and produce the pi stop reason. */
 	finish(result: ResultMessageLike): "stop" | "length" | "toolUse" {
 		if (!this.hadUsage) this.addUsage(result.usage);
-		this.ai.calculateCost(this.model, this.output.usage);
-		if (typeof result.total_cost_usd === "number" && result.total_cost_usd > 0) {
-			this.output.usage.cost.total = result.total_cost_usd;
+		// Turns ride the Claude Code subscription; report the provider-billed
+		// total when Claude Code reports one, zero otherwise.
+		this.output.usage.cost.total =
+			typeof result.total_cost_usd === "number" && result.total_cost_usd > 0 ? result.total_cost_usd : 0;
 
-		}
 		if (this.hasToolCalls) return "toolUse";
 		return this.stopHint === "length" ? "length" : "stop";
 	}
