@@ -43,14 +43,17 @@ export class PendingTools {
 		this.next = id;
 	}
 
+	/** Optional: synchronously satisfy a call the moment it parks (result already in the host transcript). */
+	onPark?: (id: string) => ParkedResult | undefined;
+
+
 	/** MCP tools/call: park until pi's tool result arrives. */
 	async call(name: string): Promise<CallToolResult> {
 		const id = this.next;
 		this.next = undefined;
 		if (!id) throw new Error(`Claude Code invoked pi tool "${name}" without a preceding PreToolUse id`);
 		const call = this.expect(id, name);
-		const result = await call.result.promise;
-		if (result.replacement) this.replacements.set(id, result.replacement);
+		const result = this.onPark?.(id) ?? (await call.result.promise);
 		this.calls.delete(id);
 		return result.mcp;
 	}

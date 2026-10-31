@@ -311,27 +311,41 @@ export class Bridge {
 		this.lastActivity = Date.now();
 		const output = emptyAssistant(model);
 		const accumulator = new SdkToPiAccumulator(ai, stream, output, model);
-		try {
-			for (const message of messages) {
-				if (message.role !== "toolResult") continue;
-				const toolResult = message as ToolResultMessage;
-				if (this.consumedResults.has(toolResult.toolCallId)) continue;
-				if (this.pending.resolveIfWaiting(toolResult.toolCallId, toolResultToMcp(toolResult))) {
-					this.consumedResults.add(toolResult.toolCallId);
-				}
-			}
-			for (const user of newUserMessages) {
-				this.pushUser({
-					type: "user",
-					message: { role: "user", content: sdkUserContent(user.content) },
-					parent_tool_use_id: null,
-				});
-			}
-			await this.readUntilBoundary(accumulator, stream, output, signal);
-		} finally {
-			this.busy = false;
-			this.lastActivity = Date.now();
+		// Claude Code runs parallel tool calls from one assistant message
+		// sequentially: resolving the first parked call makes it fire the next
+		// mid-turn, with no new SDK message in between. Satisfy any parked call
+		// from the transcript the moment it parks, or the turn deadlocks.
+		const resultsById = new Map<string, ToolResultMessage>();
+		for (const message of messages) {
+			if (message.role === "toolResult") resultsById.set(message.toolCallId, message as ToolResultMessage);
 		}
+		this.pending.onPark = (id) => {
+			const result = resultsById.get(id);
+			if (!result || this.consumedResults.has(id)) return undefined;
+			this.consumedResults.add(id);
+			return toolResultToMcp(result);
+		};
+		try {
+		for (const message of messages) {
+			if (message.role !== "toolResult") continue;
+			const toolResult = message as ToolResultMessage;
+			if (this.consumedResults.has(toolResult.toolCallId)) continue;
+			if (this.pending.resolveIfWaiting(toolResult.toolCallId, toolResultToMcp(toolResult))) {
+				this.consumedResults.add(toolResult.toolCallId);
+			}
+		}
+		for (const user of newUserMessages) {
+			this.pushUser({
+				type: "user",
+				message: { role: "user", content: sdkUserContent(user.content) },
+				parent_tool_use_id: null,
+			});
+		}
+		await this.readUntilBoundary(accumulator, stream, output, signal);
+	} finally {
+		this.busy = false;
+		this.lastActivity = Date.now();
+	}
 		return output;
 	}
 

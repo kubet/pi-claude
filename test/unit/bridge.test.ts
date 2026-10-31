@@ -234,6 +234,82 @@ describe("BridgeManager", () => {
 		expect(lastEvent(await secondHandle.events).reason).toBe("stop");
 	});
 
+	test("parallel tool calls resolve mid-turn without waiting for a new SDK message", async () => {
+		const captured: FakeQuery[] = [];
+		const manager = new BridgeManager(ai, makeSpawn(captured));
+		const users = [userMessage("read both files")];
+		const system = { role: "system", content: SYSTEM, timestamp: 0 } as Message;
+		const acquired = manager.acquire({
+			key: bridgeKey("default", undefined, SYSTEM, TOOLS),
+			systemPrompt: SYSTEM,
+			tools: TOOLS,
+			transcript: asTranscript([system, ...users]),
+			userMessages: users,
+			model,
+			cwd: process.cwd(),
+		});
+		const fake = captured[0] as FakeQuery;
+		const first = startTurn(acquired.bridge, [system, ...users], acquired.newUserMessages);
+		await fake.waitForUserMessages(1);
+		fake.emit(assistantMessage([
+			{ type: "tool_use", id: "ta", name: "mcp__pi__read", input: { path: "a.txt" } },
+			{ type: "tool_use", id: "tb", name: "mcp__pi__read", input: { path: "b.txt" } },
+		], "tool_use"));
+		await first.turn;
+		expect(lastEvent(await first.events).reason).toBe("toolUse");
+
+		// pi executed BOTH tools; the follow-up call carries both results.
+		const assistantReply = {
+			role: "assistant",
+			content: [
+				{ type: "toolCall", id: "ta", name: "read", arguments: { path: "a.txt" } },
+				{ type: "toolCall", id: "tb", name: "read", arguments: { path: "b.txt" } },
+			],
+			api: "claude-code",
+			provider: PROVIDER_ID,
+			model: "default",
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+			stopReason: "toolUse",
+			timestamp: Date.now(),
+		} as Message;
+		const messages: Message[] = [
+			system,
+			...users,
+			assistantReply,
+			toolResult("ta", "read", "alpha"),
+			toolResult("tb", "read", "beta"),
+		];
+		const second = manager.acquire({
+			key: bridgeKey("default", undefined, SYSTEM, TOOLS),
+			systemPrompt: SYSTEM,
+			tools: TOOLS,
+			transcript: asTranscript(messages),
+			userMessages: users,
+			model,
+			cwd: process.cwd(),
+		});
+		expect(second.bridge).toBe(acquired.bridge);
+		const handle = startTurn(second.bridge, messages, []);
+
+		// Claude Code runs the parallel calls sequentially: after the first
+		// resolves it fires the second mid-turn, with no SDK message in between.
+		const hooks = fake.options?.hooks as { PreToolUse: Array<{ hooks: Array<(input: unknown) => Promise<object>> }> };
+		const pre = hooks.PreToolUse[0]!.hooks[0]!;
+		const call = acquired.bridge.pending.call.bind(acquired.bridge.pending);
+		await pre({ hook_event_name: "PreToolUse", tool_use_id: "ta", tool_name: "mcp__pi__read" });
+		const callA = call("read");
+		await pre({ hook_event_name: "PreToolUse", tool_use_id: "tb", tool_name: "mcp__pi__read" });
+		const callB = call("read");
+
+		// Both resolve from the transcript without a next turn — then the turn ends.
+		expect(await callA).toEqual({ content: [{ type: "text", text: "alpha" }], isError: false });
+		expect(await callB).toEqual({ content: [{ type: "text", text: "beta" }], isError: false });
+		fake.emit(assistantMessage([{ type: "text", text: "both read" }]));
+		fake.emit(resultMessage());
+		await handle.turn;
+		expect(lastEvent(await handle.events).reason).toBe("stop");
+	});
+
 	test("divergent history respawns with a restore message", async () => {
 		const captured: FakeQuery[] = [];
 		const manager = new BridgeManager(ai, makeSpawn(captured));
